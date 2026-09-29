@@ -115,6 +115,52 @@ checks or no metrics ran.
 
 ---
 
+## Measurability uptime
+
+Issue [#195](https://github.com/Wayfare-labs/wayfare/issues/195) (entry 124
+of docs/backlog.md): uptime of the measurement, not of the service — how
+many scheduled sweeps produced a priced ladder.
+
+**Measurable means the sweep produced a price.** A run is measurable when at
+least one of its rungs priced — not all of them; a ladder whose smaller sizes
+failed while larger ones answered is still a priced ladder. This is the
+measurement's own uptime: a `DIRECT` corridor that prices badly is measurable,
+and a `NO-MARKET` corridor is not — the sweep ran fine and Horizon answered,
+but the answer is that no path exists, so there is no price and no loss figure
+to analyse. A service that is up while Horizon is down would score 100% HTTP
+uptime and 0% measurement uptime; the distinction is the point.
+
+`runstore.Measurable` reports it for one record;
+`runstore.MeasurabilityOf` summarises the whole chain:
+
+- **`total_runs`** — the recorded runs the figure covers: the denominator,
+  always present, so a reader can see what the percentage stands on. It
+  counts recorded runs only: a sweep that died before writing a record left
+  nothing in the chain, and inventing a run for it would be synthesis (the
+  not-measured-versus-could-not-be distinction is entry 118 of
+  docs/backlog.md).
+- **`measurable_runs`** / **`not_measurable_runs`** — the counts, carried
+  separately so a reader never has to subtract.
+- **`uptime_pct`** — `measurable_runs / total_runs × 100`, computed in
+  `decimal.Decimal` like every other percentage in this repository. A
+  measured `"0"` (every sweep recorded, none priced) is a finding about the
+  corridor. It is empty only when `total_runs` is zero — no recorded history,
+  so uptime is **unknown, never zero**: a corridor that was not measured is
+  not a corridor that was never measurable.
+- **`first_run_at` / `last_run_at`** — the window the figure covers, so
+  "0% over three days" is distinguishable from "0% over an hour".
+
+`runstore.MeasurabilityHistory` returns the per-run classification, oldest
+first — whether each sweep priced, how many of its rungs did, and the
+integrity state it recorded, so a reader can tell a `NO-MARKET` run (the
+corridor was measured and has no market) from an `UNKNOWN` one (an upstream
+outage; nothing was learned).
+
+Like every reader here, the classification is derived on read and appends
+nothing: not a single hash in the chain depends on it.
+
+---
+
 ## The preimage rule
 
 ```
@@ -176,7 +222,8 @@ chains**, exactly like the Version 2 migration:
 Concretely:
 
 - A record written as Version 1 or Version 2 stays that version on disk
-  forever. Nothing is relabelled or rewritten — the store is append-only.
+  forever. Nothing is relabelled or rewritten — the store is append-only
+  except for rotation (see [Rotating a chain](#rotating-a-chain)).
 - New records are written `version: 3`, carrying `fetched_at` when the
   measurement knew when its rate was fetched and omitting it when it did not
   (an older build's record, or a provider that left the stamp unset — the
@@ -211,7 +258,8 @@ chains**, and intentionally so:
 Concretely:
 
 - A record written as Version 1 stays `version: 1` on disk forever. Nothing
-  is relabelled or rewritten — the store is append-only.
+  is relabelled or rewritten — the store is append-only except for rotation
+  (see [Rotating a chain](#rotating-a-chain)).
 - New records are written `version: 2`, with a `checks`/`metrics` block when
   checks ran and both blocks omitted when none did.
 - A corridor's file can therefore become a **mixed-version chain** (older
@@ -298,6 +346,42 @@ runstore: USDC-NGNC: record seq 3 has hash 1872c8f15412… but its contents
 hash to 8a4eecd77b48…; it was modified after it was written
 ```
 
+### Rotating a chain
+
+The committed store is a **bounded window**, not the whole chain (ADR 007,
+[issue #201](https://github.com/Wayfare-labs/wayfare/issues/201)). At the
+six-hour cadence a corridor gains ~1,460 records a year; left alone the
+embedded history would outgrow the repository. The answer is to keep, per
+corridor, the newest `runstore.MaxWindow` (366, one quarter) records and drop
+the rest.
+
+```bash
+wayfared -rotate-store                # trim every chain over the ceiling
+wayfared -rotate-store -rotate-records 1000   # custom ceiling, if you must
+```
+
+`Rotate` is the one place the store is not append-only. A chain that has
+outgrown the ceiling is truncated to its newest `n` records and **re-sealed**:
+the new window head's `prev_hash` is set back to the genesis hash and every
+subsequent `prev_hash` is re-derived, so the surviving window verifies as a
+self-contained chain. Before writing, rotation re-verifies the chain it is
+about to stand on, and refuses a chain that is already broken.
+
+What rotation is **not**:
+
+- It does not touch measured contents. Only `hash` and `prev_hash` move.
+- It does not destroy dropped records. The archive is the repository's own
+  git history: every prior commit contains the chain as it stood, and this is
+  the copy a reader who wants the deep history consults. Rotation is what
+  lets the committed window stay bounded *and* the whole story stay verifiable.
+- It does not edit records whole. `seq` values are preserved, so a reader can
+  tell where the window begins relative to the run.
+
+A rotation is visible from outside: compared with an older commit, the window
+head's `hash` has changed even though its measurements are byte-identical.
+That is deliberate — a re-sealed window must not masquerade as the original
+chain — and `TestRotateChangesTheWindowHashes` pins it.
+
 ### Backups
 
 The chain proves nothing was edited. It does **not** survive the volume dying.
@@ -309,5 +393,6 @@ a backup nobody has restored from is a hypothesis. See
 
 ## Related
 
+- [rollback.md](rollback.md) — returning to an older image, and verifying the chain it serves
 - [snapshot-format.md](snapshot-format.md) — recorded upstream bytes
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — project invariants
