@@ -388,7 +388,7 @@ func TestTrendDivergenceStatsNegativeValueIsAnError(t *testing.T) {
 
 	status, body := getJSON(t, srv.URL+"/api/corridor/trend?to=NGNC")
 	if status != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 for a negative stored divergence_pct: %v", status, body)
+		t.Fatalf("status = %d, want 500 for a corrupt stored divergence_pct: %v", status, body)
 	}
 	if body["error"] == nil {
 		t.Error("expected an error message")
