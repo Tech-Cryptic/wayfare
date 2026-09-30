@@ -281,3 +281,8 @@ No implementation is attempted as part of this finding. The design is ready for 
 ---
 
 *This document is a research finding per Initiative E (V4+). It produces no code. Per the governing rule: a layer can never be more certain than the layer beneath it. This design ensures that if Layer 3 output ever reaches the UI, it carries its epistemic category visibly and irreversibly.*
+# Measurement and Inference Boundary
+
+## Unpriced Rungs and Holes
+
+When upstream liquidity fails or a rung cannot be priced at a specific trade size, Wayfare explicitly marks that rung as unpriced. No rate or interpolated value is ever synthesized or assigned to fill the gap. The curve preserves holes transparently as part of the execution economics discipline.
